@@ -1,0 +1,81 @@
+library(rentrez)
+
+# -----------------------------
+# 1️⃣ Load LOC IDs and filter
+# -----------------------------
+loc_data <- read.csv("blue_module_DEG_overlap_genes.csv", header = FALSE, stringsAsFactors = FALSE)
+loc_data <- loc_data[grepl("^LOC", loc_data$V1), , drop=FALSE]
+loc_ids <- loc_data$V1
+cat("Total valid LOC IDs:", length(loc_ids), "\n")
+
+# -----------------------------
+# 2️⃣ Split LOC IDs into batches
+# -----------------------------
+batch_size <- 50  # Adjust depending on your PC/network
+chunks <- split(loc_ids, ceiling(seq_along(loc_ids)/batch_size))
+cat("Total batches to process:", length(chunks), "\n")
+
+# -----------------------------
+# 3️⃣ Process each batch
+# -----------------------------
+all_results <- list()
+batch_counter <- 1
+
+for (chunk in chunks) {
+  
+  cat("Processing batch", batch_counter, "of", length(chunks), "\n")
+  
+  for (loc_id in chunk) {
+    
+    # Search for Gene ID corresponding to LOC ID
+    gene_id <- tryCatch({
+      res <- entrez_search(db="gene", term=loc_id)
+      if (length(res$ids) > 0) res$ids[1] else NA_character_
+    }, error = function(e) NA_character_)
+    
+    # Get gene summary if gene_id is valid
+    if (!is.na(gene_id)) {
+      summary <- tryCatch({
+        entrez_summary(db="gene", id=gene_id)
+      }, error=function(e) NULL)
+      
+      if (!is.null(summary)) {
+        gene_symbol <- summary$name
+        description <- summary$description
+      } else {
+        gene_symbol <- NA_character_
+        description <- NA_character_
+      }
+    } else {
+      gene_symbol <- NA_character_
+      description <- NA_character_
+    }
+    
+    # Save the result
+    all_results[[length(all_results)+1]] <- data.frame(
+      LOC_ID = loc_id,
+      Gene_Symbol = gene_symbol,
+      Description = description,
+      stringsAsFactors = FALSE
+    )
+    
+    Sys.sleep(0.34)  # Avoid NCBI rate limits
+  }
+  
+  # -----------------------------
+  # Save intermediate results per batch
+  # -----------------------------
+  batch_df <- do.call(rbind, all_results)
+  write.csv(batch_df, paste0("LOC_to_gene_symbols_up_to_batch_", batch_counter, ".csv"),
+            row.names = FALSE)
+  
+  batch_counter <- batch_counter + 1
+}
+
+# -----------------------------
+# 4️⃣ Save final combined results
+# -----------------------------
+gene_info <- do.call(rbind, all_results)
+write.csv(gene_info, "LOC_to_gene_symbols_final.csv", row.names = FALSE)
+cat("Mapping complete! Total genes processed:", nrow(gene_info), "\n")
+head(gene_info)
